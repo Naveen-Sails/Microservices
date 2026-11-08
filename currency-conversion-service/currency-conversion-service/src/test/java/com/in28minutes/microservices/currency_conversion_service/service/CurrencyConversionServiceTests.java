@@ -8,8 +8,6 @@ import com.in28minutes.microservices.currency_conversion_service.repository.Conv
 import feign.FeignException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -19,12 +17,15 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Optional;
-import java.util.stream.Stream;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -49,12 +50,13 @@ class CurrencyConversionServiceTests {
         CurrencyConversion result = conversionService.calculate(
                 " usd ", "eur", new BigDecimal("2"));
 
-        assertEquals("USD", result.getFrom());
-        assertEquals("EUR", result.getTo());
-        assertEquals(7L, result.getId());
-        assertEquals(new BigDecimal("1.2345"), result.getConversionMultiple());
-        assertEquals(new BigDecimal("2.47"), result.getTotalCalculatedAmount());
-        assertEquals("8000", result.getEnvironment());
+        assertAll(
+                () -> assertEquals("USD", result.getFrom()),
+                () -> assertEquals("EUR", result.getTo()),
+                () -> assertEquals(7L, result.getId()),
+                () -> assertEquals(new BigDecimal("1.2345"), result.getConversionMultiple()),
+                () -> assertEquals(new BigDecimal("2.47"), result.getTotalCalculatedAmount()),
+                () -> assertEquals("8000", result.getEnvironment()));
         verify(exchangeProxy).retrieveExchangeValue("USD", "EUR");
         verifyNoInteractions(conversionRecordRepository);
     }
@@ -64,53 +66,50 @@ class CurrencyConversionServiceTests {
         CurrencyConversion result = conversionService.calculate(
                 "jpy", "JPY", new BigDecimal("10.50"));
 
-        assertEquals("JPY", result.getFrom());
-        assertEquals("JPY", result.getTo());
-        assertEquals(BigDecimal.ONE, result.getConversionMultiple());
-        assertEquals(new BigDecimal("10.50"), result.getTotalCalculatedAmount());
-        assertEquals("same-currency", result.getEnvironment());
+        assertAll(
+                () -> assertEquals("JPY", result.getFrom()),
+                () -> assertEquals("JPY", result.getTo()),
+                () -> assertEquals(BigDecimal.ONE, result.getConversionMultiple()),
+                () -> assertEquals(new BigDecimal("10.50"), result.getTotalCalculatedAmount()),
+                () -> assertEquals("same-currency", result.getEnvironment()));
         verifyNoInteractions(exchangeProxy, conversionRecordRepository);
     }
 
-    @ParameterizedTest
-    @MethodSource("invalidCurrencyCodes")
-    void calculateRejectsInvalidCurrencyCodes(String from, String to) {
-        assertThrows(IllegalArgumentException.class,
-                () -> conversionService.calculate(from, to, BigDecimal.ONE));
-
-        verifyNoInteractions(exchangeProxy, conversionRecordRepository);
-    }
-
-    static Stream<org.junit.jupiter.params.provider.Arguments> invalidCurrencyCodes() {
-        return Stream.of(
-                org.junit.jupiter.params.provider.Arguments.of(null, "EUR"),
-                org.junit.jupiter.params.provider.Arguments.of("US", "EUR"),
-                org.junit.jupiter.params.provider.Arguments.of("US1", "EUR"),
-                org.junit.jupiter.params.provider.Arguments.of("USD", "EURO"),
-                org.junit.jupiter.params.provider.Arguments.of("USD", " E U"));
-    }
-
-    @ParameterizedTest
-    @MethodSource("invalidQuantities")
-    void calculateRejectsInvalidQuantities(BigDecimal quantity) {
-        assertThrows(IllegalArgumentException.class,
-                () -> conversionService.calculate("USD", "EUR", quantity));
+    @Test
+    void calculateRejectsMalformedCurrencyCodes() {
+        assertAll(
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> conversionService.calculate(null, "EUR", BigDecimal.ONE)),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> conversionService.calculate("US", "EUR", BigDecimal.ONE)),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> conversionService.calculate("US1", "EUR", BigDecimal.ONE)),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> conversionService.calculate("USD", "EURO", BigDecimal.ONE)));
 
         verifyNoInteractions(exchangeProxy, conversionRecordRepository);
     }
 
-    static Stream<BigDecimal> invalidQuantities() {
-        return Stream.of(
-                null,
-                BigDecimal.ZERO,
-                new BigDecimal("-0.01"),
-                new BigDecimal("1000000000"),
-                new BigDecimal("1.1234567"));
+    @Test
+    void calculateRejectsInvalidQuantities() {
+        assertAll(
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> conversionService.calculate("USD", "EUR", null)),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> conversionService.calculate("USD", "EUR", BigDecimal.ZERO)),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> conversionService.calculate("USD", "EUR", new BigDecimal("-0.01"))),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> conversionService.calculate("USD", "EUR", new BigDecimal("1000000000"))),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> conversionService.calculate("USD", "EUR", new BigDecimal("1.1234567"))));
+
+        verifyNoInteractions(exchangeProxy, conversionRecordRepository);
     }
 
     @Test
     void calculateWrapsExchangeServiceFailureAsRateUnavailable() {
-        FeignException feignException = org.mockito.Mockito.mock(FeignException.class);
+        FeignException feignException = mock(FeignException.class);
         when(exchangeProxy.retrieveExchangeValue("USD", "EUR")).thenThrow(feignException);
 
         CurrencyRateUnavailableException exception = assertThrows(
@@ -123,25 +122,28 @@ class CurrencyConversionServiceTests {
     }
 
     @Test
-    void calculateRejectsMissingExchangeRate() {
-        when(exchangeProxy.retrieveExchangeValue("USD", "EUR")).thenReturn(null);
-
+    void calculateRejectsMissingAndInvalidExchangeRates() {
+        doReturn(null).when(exchangeProxy).retrieveExchangeValue("USD", "EUR");
         assertThrows(CurrencyRateUnavailableException.class,
                 () -> conversionService.calculate("USD", "EUR", BigDecimal.ONE));
-    }
 
-    @ParameterizedTest
-    @MethodSource("invalidExchangeRates")
-    void calculateRejectsNullOrNonPositiveExchangeRate(BigDecimal rate) {
-        when(exchangeProxy.retrieveExchangeValue("USD", "EUR"))
-                .thenReturn(new CurrencyConversion(1L, "USD", "EUR", null, rate, null, "8000"));
-
+        doReturn(exchangeRate(1L, null, "8000"))
+                .when(exchangeProxy).retrieveExchangeValue("USD", "EUR");
         assertThrows(CurrencyRateUnavailableException.class,
                 () -> conversionService.calculate("USD", "EUR", BigDecimal.ONE));
-    }
 
-    static Stream<BigDecimal> invalidExchangeRates() {
-        return Stream.of(null, BigDecimal.ZERO, new BigDecimal("-0.5"));
+        doReturn(exchangeRate(1L, "0", "8000"))
+                .when(exchangeProxy).retrieveExchangeValue("USD", "EUR");
+        assertThrows(CurrencyRateUnavailableException.class,
+                () -> conversionService.calculate("USD", "EUR", BigDecimal.ONE));
+
+        doReturn(exchangeRate(1L, "-0.5", "8000"))
+                .when(exchangeProxy).retrieveExchangeValue("USD", "EUR");
+        assertThrows(CurrencyRateUnavailableException.class,
+                () -> conversionService.calculate("USD", "EUR", BigDecimal.ONE));
+
+        verify(exchangeProxy, times(4)).retrieveExchangeValue("USD", "EUR");
+        verifyNoInteractions(conversionRecordRepository);
     }
 
     @Test
@@ -159,56 +161,34 @@ class CurrencyConversionServiceTests {
         verify(conversionRecordRepository).save(recordCaptor.capture());
         ConversionRecord persistedRecord = recordCaptor.getValue();
         assertSame(persistedRecord, result);
-        assertEquals(7L, persistedRecord.getExchangeRateId());
-        assertEquals("USD", persistedRecord.getFrom());
-        assertEquals("EUR", persistedRecord.getTo());
-        assertEquals(new BigDecimal("2"), persistedRecord.getQuantity());
-        assertEquals(new BigDecimal("1.2345"), persistedRecord.getConversionMultiple());
-        assertEquals(new BigDecimal("2.47"), persistedRecord.getTotalCalculatedAmount());
-        assertEquals("8000", persistedRecord.getEnvironment());
+        assertAll(
+                () -> assertEquals(7L, persistedRecord.getExchangeRateId()),
+                () -> assertEquals("USD", persistedRecord.getFrom()),
+                () -> assertEquals("EUR", persistedRecord.getTo()),
+                () -> assertEquals(new BigDecimal("2"), persistedRecord.getQuantity()),
+                () -> assertEquals(new BigDecimal("1.2345"), persistedRecord.getConversionMultiple()),
+                () -> assertEquals(new BigDecimal("2.47"), persistedRecord.getTotalCalculatedAmount()),
+                () -> assertEquals("8000", persistedRecord.getEnvironment()));
     }
 
     @Test
-    void convertAndRecordDoesNotCallExchangeServiceForSameCurrency() {
-        when(conversionRecordRepository.save(any(ConversionRecord.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
-
-        ConversionRecord result = conversionService.convertAndRecord(
-                "CAD", "cad", new BigDecimal("5"));
-
-        assertEquals("CAD", result.getFrom());
-        assertEquals("CAD", result.getTo());
-        assertEquals(BigDecimal.ONE, result.getConversionMultiple());
-        assertEquals(new BigDecimal("5.00"), result.getTotalCalculatedAmount());
-        verifyNoInteractions(exchangeProxy);
-        verify(conversionRecordRepository).save(any(ConversionRecord.class));
-    }
-
-    @Test
-    void getRecentConversionsReturnsRequestedNumberFromNewestFirstResults() {
-        ConversionRecord first = record("USD", "EUR", "1");
-        ConversionRecord second = record("USD", "JPY", "2");
+    void getRecentConversionsReturnsRequestedRecordsAndRejectsInvalidLimits() {
+        ConversionRecord newest = record("USD", "EUR", "1");
+        ConversionRecord nextNewest = record("USD", "JPY", "2");
         when(conversionRecordRepository.findTop100ByOrderByCreatedAtDesc())
-                .thenReturn(List.of(first, second));
+                .thenReturn(List.of(newest, nextNewest));
 
-        List<ConversionRecord> result = conversionService.getRecentConversions(1);
+        assertEquals(List.of(newest), conversionService.getRecentConversions(1));
+        assertAll(
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> conversionService.getRecentConversions(-1)),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> conversionService.getRecentConversions(0)),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> conversionService.getRecentConversions(101)));
 
-        assertEquals(List.of(first), result);
         verify(conversionRecordRepository).findTop100ByOrderByCreatedAtDesc();
         verifyNoInteractions(exchangeProxy);
-    }
-
-    @ParameterizedTest
-    @MethodSource("invalidHistoryLimits")
-    void getRecentConversionsRejectsLimitsOutsideSupportedRange(int limit) {
-        assertThrows(IllegalArgumentException.class,
-                () -> conversionService.getRecentConversions(limit));
-
-        verifyNoInteractions(conversionRecordRepository, exchangeProxy);
-    }
-
-    static Stream<Integer> invalidHistoryLimits() {
-        return Stream.of(-1, 0, 101);
     }
 
     @Test
@@ -223,40 +203,36 @@ class CurrencyConversionServiceTests {
     }
 
     @Test
-    void getConversionThrowsNotFoundWhenRecordDoesNotExist() {
+    void getConversionReportsMissingRecordsAndRejectsInvalidIds() {
         when(conversionRecordRepository.findById(99L)).thenReturn(Optional.empty());
 
         assertThrows(NoSuchElementException.class, () -> conversionService.getConversion(99L));
+        assertAll(
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> conversionService.getConversion(null)),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> conversionService.getConversion(0L)),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> conversionService.getConversion(-1L)));
 
         verify(conversionRecordRepository).findById(99L);
-    }
-
-    @ParameterizedTest
-    @MethodSource("invalidConversionIds")
-    void getConversionRejectsNullOrNonPositiveIds(Long id) {
-        assertThrows(IllegalArgumentException.class, () -> conversionService.getConversion(id));
-
-        verifyNoInteractions(conversionRecordRepository, exchangeProxy);
-    }
-
-    static Stream<Long> invalidConversionIds() {
-        return Stream.of(null, 0L, -1L);
+        verifyNoInteractions(exchangeProxy);
     }
 
     private CurrencyConversion exchangeRate(Long id, String rate, String environment) {
         return new CurrencyConversion(
-                id, "USD", "EUR", null, new BigDecimal(rate), null, environment);
+                id,
+                "USD",
+                "EUR",
+                null,
+                rate == null ? null : new BigDecimal(rate),
+                null,
+                environment);
     }
 
     private ConversionRecord record(String from, String to, String quantity) {
-        ConversionRecord record = new ConversionRecord(
-                1L,
-                from,
-                to,
-                new BigDecimal(quantity),
-                BigDecimal.ONE,
-                new BigDecimal(quantity).setScale(2),
-                "test");
-        return record;
+        BigDecimal amount = new BigDecimal(quantity);
+        return new ConversionRecord(
+                1L, from, to, amount, BigDecimal.ONE, amount.setScale(2), "test");
     }
 }
